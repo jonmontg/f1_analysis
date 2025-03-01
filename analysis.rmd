@@ -1,0 +1,87 @@
+---
+title: "Formula 1 Data Analysis"
+author: "Jon Montgomery"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+  word_document: default
+---
+
+# Formula 1 Data Analysis
+
+### 1.
+In this project, we will explore the Formula 1 World Championship data from
+1950 to 2024. The data set is available [on kaggle](https://www.kaggle.com/datasets/rohanrao/formula-1-world-championship-1950-2020). 
+It consists of various CSV files containing tabular data regarding drivers, 
+circuits, teams, and results ranging from the granularity of championship
+standings to pit stop characteristics. The data are very high quality.
+
+I will be working with Abhishek on this project.
+
+### 2.
+We want to use the historical data to create a Markov Chain model to predict
+the performance of a driver in the next race. We want to test the effectiveness
+of the Markov Chain predictions against naive models to see if we can gain an
+edge. Here are some examples of naive models:\newline
+1. A driver's performance is random. \newline
+2. A driver's performance in the next race will be the same as their performance
+in the prior race. \newline
+3. A driver's performance in the next race will be equal to the average of their
+performance in the prior 10 races. \newline
+
+We will split the data into random samplings of training and test data (60%
+training and 40% test). Once the model is trained, we will evaluate the
+performance of each model against the test data using the mean absolute error
+metric, where the error is the difference between the predicted driver rank
+and the actual driver rank.
+
+Once we have calculated the mean absolute error for each model, we will test
+the differences in the errors for statistical significance. The method we will
+use to test for statistical significance will depend on whether or not the
+errors are normally distributed. If the errors are normally distributed, we will
+compare the results with the paired t-test. If the errors are not normally
+distributed, we will use the Wilcoxon signed-rank test.
+
+### 3.
+We will use git for version control in this project. Abhishek and I will both
+do preliminary data cleaning and exploration and then merge our findings. I will
+build the markov models and most of the code infrastructure for the project.
+Then Abhishek will review, we will test the models, and Abhishek will compile
+slides for the presentation. Once we have the data, we will write the paper,
+dividing it between us depending on who is most familiar with each part.
+
+For cleaning and exploration, we will evaluate each table and field to decide
+which variables could hold predictive power and should be included in the
+Markov model. We will identify missing values and handle them appropriately
+on a case-by-case basis. We will also identify the breakpoints between seasons
+with discontinuous car specifications (every 8 years or so the "formula" of the
+cars changes drastically). We'll divide the data randomly into testing and
+training data and evaluate the models. We will complete this portion of the
+project this weekend March 2.
+
+I'll build the Markov Chains between March 3-7 and we will train them and do
+analysis over the weekend March 8-9. We will spend the rest of our time preparing
+the paper and the presentation.
+
+```{r}
+knitr::opts_chunk$set(echo = TRUE)
+library(stringr)
+library(ggplot2)
+library(knitr)
+library(unifed)
+```
+
+Markov Chain Parameters
+- circuit id
+- driver id
+- driver's average rank over the past 10 races
+- driver's most recent rank
+- qualifying position
+- constructor id
+- constructor rank
+- constructor's median pit stop time in the past 10 races
+- weather ?
+
+One row per driver per race.
+
