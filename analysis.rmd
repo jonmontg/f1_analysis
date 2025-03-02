@@ -70,18 +70,148 @@ library(stringr)
 library(ggplot2)
 library(knitr)
 library(unifed)
+library(readr)
+library(dplyr)
 ```
 
 Markov Chain Parameters
-- circuit id
-- driver id
-- driver's average rank over the past 10 races
-- driver's most recent rank
-- qualifying position
-- constructor id
-- constructor rank
-- constructor's median pit stop time in the past 10 races
-- weather ?
+
+ - circuit id
+ - driver id
+ - driver's average rank over the past 10 races
+ - driver's most recent rank
+ - qualifying position
+ - constructor id
+ - constructor rank
+ - constructor's median pit stop time in the past 10 races
+ - weather ?
 
 One row per driver per race.
+
+### Read the data into dataframes
+```{r}
+circuits<-
+  read_csv(file.path("data", "circuits.csv"),
+           col_types  = cols(
+           circuitId  = col_integer(),
+           circuitRef = col_character(),
+           name       = col_character(),
+           location   = col_character(),
+           country    = col_character(),
+           lat        = col_double(),
+           lng        = col_double(),
+           alt        = col_integer(),
+           url        = col_character())) %>%
+  select(-c(
+    "circuitRef",
+    "location",
+    "country",
+    "lat",
+    "lng",
+    "alt",
+    "url"))
+
+constructor.standings<-
+  read_csv(file.path("data", "constructor_standings.csv"),
+           col_types = cols(
+             constructorStandingsId = col_integer(),
+             raceId                 = col_integer(),
+             constructorId          = col_integer(),
+             points                 = col_double(),
+             position               = col_integer(),
+             positionText           = col_character(),
+             wins                   = col_integer())) %>%
+  select(-c(
+    "points",
+    "positionText",
+    "wins"))
+
+constructors<-
+  read_csv(file.path("data", "constructors.csv"),
+           col_types = cols(
+             constructorId  = col_integer(),
+             constructorRef = col_character(),
+             name           = col_character(),
+             nationality    = col_character(),
+             url            = col_character())) %>%
+  select(-c(
+    "nationality",
+    "url"))
+
+driver.standings<-
+  read_csv(file.path("data", "driver_standings.csv"),
+           col_types = cols(
+             driverStandingsId = col_integer(),
+             raceId            = col_integer(),
+             driverId          = col_integer(),
+             points            = col_double(),
+             position          = col_integer(),
+             positionText      = col_character(),
+             wins              = col_integer())) %>%
+  select(-c(
+    "points",
+    "positionText",
+    "wins"))
+
+drivers<-
+  read_csv(file.path("data", "drivers.csv"),
+           col_types = cols(
+             driverId =    col_integer(),
+             driverRef =   col_character(),
+             number =      col_character(),
+             code =        col_character(),
+             forename =    col_character(),
+             surname =     col_character(),
+             dob =         col_date(),
+             nationality = col_character(),
+             url =         col_character())) %>%
+  select(-c(
+    "number",
+    "code",
+    "dob",
+    "nationality",
+    "url"))
+
+races<-
+  read_csv(file.path("data", "races.csv"),
+           col_types = cols(
+             raceId =    col_integer(),
+             year =      col_integer(),
+             round =     col_integer(),
+             circuitId = col_integer(),
+             name =      col_character(),
+             date =      col_date(),
+             time =      col_character(),
+             url =       col_character(),
+             fp1_date =  col_character(),
+             fp1_time =  col_character())) %>%
+  select(-c(
+    "year",
+    "round",
+    "name",
+    "time",
+    "url",
+    "fp1_date",
+    "fp1_time"))
+
+results<-
+  read_csv(file.path("data", "results.csv"),
+           col_types = cols(
+             resultId =      col_integer(),
+             raceId =        col_integer(),
+             driverId =      col_integer(),
+             constructorId = col_integer(),
+             number =        col_character(),
+             grid =          col_integer(),
+             position =      col_character(),
+             positionText =  col_character(),
+             positionOrder = col_integer(),
+             points =        col_double())) %>%
+  select(-c(
+    "number",
+    "position",
+    "positionText",
+    "points"))
+```
+### Creating the usable data
 
