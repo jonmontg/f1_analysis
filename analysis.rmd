@@ -72,6 +72,7 @@ library(knitr)
 library(unifed)
 library(readr)
 library(dplyr)
+library(slider)
 ```
 
 Markov Chain Parameters
@@ -109,7 +110,8 @@ circuits<-
     "lat",
     "lng",
     "alt",
-    "url"))
+    "url")) %>%
+  rename(circuitName=name)
 
 constructor.standings<-
   read_csv(file.path("data", "constructor_standings.csv"),
@@ -124,7 +126,8 @@ constructor.standings<-
   select(-c(
     "points",
     "positionText",
-    "wins"))
+    "wins")) %>%
+  rename(constructorStandingsPosition = position)
 
 constructors<-
   read_csv(file.path("data", "constructors.csv"),
@@ -136,7 +139,9 @@ constructors<-
              url            = col_character())) %>%
   select(-c(
     "nationality",
-    "url"))
+    "url",
+    "constructorRef")) %>%
+  rename(constructorName = name)
 
 driver.standings<-
   read_csv(file.path("data", "driver_standings.csv"),
@@ -151,7 +156,8 @@ driver.standings<-
   select(-c(
     "points",
     "positionText",
-    "wins"))
+    "wins")) %>%
+  rename(driverStandingsPosition = position)
 
 drivers<-
   read_csv(file.path("data", "drivers.csv"),
@@ -170,7 +176,8 @@ drivers<-
     "code",
     "dob",
     "nationality",
-    "url"))
+    "url",
+    "driverRef"))
 
 races<-
   read_csv(file.path("data", "races.csv"),
@@ -192,7 +199,15 @@ races<-
     "time",
     "url",
     "fp1_date",
-    "fp1_time"))
+    "fp1_time",
+    "fp2_date",
+    "fp2_time",
+    "fp3_date",
+    "fp3_time",
+    "quali_date",
+    "quali_time",
+    "sprint_date",
+    "sprint_time"))
 
 results<-
   read_csv(file.path("data", "results.csv"),
@@ -211,7 +226,60 @@ results<-
     "number",
     "position",
     "positionText",
-    "points"))
+    "points",
+    "laps",
+    "time",
+    "milliseconds",
+    "fastestLap",
+    "rank",
+    "fastestLapTime",
+    "fastestLapSpeed",
+    "statusId")) %>%
+  rename(raceResultPosition = positionOrder, startingPosition = grid)
+#print(races)
+#print(circuits)
+#print(results)
+#print(drivers)
+#print(constructors)
+#print(driver.standings)
+#print(constructor.standings)
 ```
 ### Creating the usable data
 
+We only include results for drivers that have at least 10 races.
+
+```{r}
+# Joining the datasets
+data <- results %>%
+  left_join(races, by = "raceId") %>%
+  left_join(circuits, by = "circuitId") %>%
+  left_join(drivers, by = "driverId") %>%
+  left_join(constructors, by = "constructorId") %>%
+  left_join(driver.standings, by = c("raceId", "driverId")) %>%
+  left_join(constructor.standings, by = c("raceId", "constructorId")) %>%
+  arrange(driverId, date) %>% # ensure the data is ordered correctly
+  group_by(driverId) %>%
+  mutate(
+    meanRaceResult10 = slider::slide_dbl(
+      raceResultPosition,  # Column to calculate rolling mean
+      mean,  # Function to apply
+      .before = 9,  # Use the prior 10 races (excluding current race)
+      .complete = TRUE  # Only compute if there are at least 10 races
+    )
+  ) %>%
+  ungroup() %>%
+  filter(!is.na(meanRaceResult10))
+
+# Final view of the final data
+glimpse(data)
+```
+```{r}
+ggplot(data, aes(x = meanRaceResult10)) +
+  geom_histogram(binwidth = 1, fill = "blue", color = "black", alpha = 0.7) +
+  labs(title = "Histogram of Mean Race Result (Last 10 Races)",
+       x = "Mean Race Result Over Last 10 Races",
+       y = "Frequency") +
+  theme_minimal()
+colSums(is.na(data))
+```
+### What should we do with the null values? What do they mean?
