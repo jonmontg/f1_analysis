@@ -2,9 +2,9 @@
 title: "Formula 1 Data Analysis"
 author: "Jon Montgomery"
 output:
-  pdf_document: default
   html_document:
     df_print: paged
+  pdf_document: default
   word_document: default
 ---
 
@@ -73,6 +73,14 @@ library(unifed)
 library(readr)
 library(dplyr)
 library(slider)
+library(markovchain)
+library(xgboost)
+library(Matrix)
+library(caret)
+library(zoo)
+library(mltools)
+
+set.seed(53782)
 ```
 
 Markov Chain Parameters
@@ -88,6 +96,10 @@ Markov Chain Parameters
  - weather ?
 
 One row per driver per race.
+
+We will not make predictions for the first race of the season or for drivers with
+fewer than 10 races. For each prediction, we only include the information that
+we know right before the race starts.
 
 ### Read the data into dataframes
 ```{r}
@@ -194,7 +206,6 @@ races<-
              fp1_time =  col_character())) %>%
   select(-c(
     "year",
-    "round",
     "name",
     "time",
     "url",
@@ -233,22 +244,51 @@ results<-
     "fastestLap",
     "rank",
     "fastestLapTime",
-    "fastestLapSpeed",
-    "statusId")) %>%
+    "fastestLapSpeed")) %>%
   rename(raceResultPosition = positionOrder, startingPosition = grid)
-#print(races)
-#print(circuits)
-#print(results)
-#print(drivers)
-#print(constructors)
-#print(driver.standings)
-#print(constructor.standings)
+
+status<-
+  read_csv(file.path("data", "status.csv"),
+           col_types = cols(
+             statusId = col_integer(),
+             status =   col_character()
+           ))
 ```
 ### Creating the usable data
 
 We only include results for drivers that have at least 10 races.
 
 ```{r}
+get_mode <- function(x) {
+  unique_x <- unique(x)
+  unique_x[which.max(tabulate(match(x, unique_x)))]
+}
+
+get_qualitative_race_result <- function(x) {
+  return(case_when(
+      x == 1 ~         "win",
+      x %in% c(2, 3) ~ "podium",
+      x <= 10 ~        "score",
+      TRUE ~           "no score"
+    ))
+}
+encoded_qualitative_race_result <- function(x) {
+  return(case_when(
+    x == "win" ~      0,
+    x == "podium" ~   1,
+    x == "score" ~    2,
+    x == "no score" ~ 3
+  ))
+}
+decode_qualitative_race_result <- function(x) {
+  return(case_when(
+    x == 0 ~ "win",
+    x == 1 ~ "podium",
+    x == 2 ~ "score",
+    x == 3 ~ "no score"
+  ))
+}
+
 # Joining the datasets
 data <- results %>%
   left_join(races, by = "raceId") %>%
@@ -257,29 +297,195 @@ data <- results %>%
   left_join(constructors, by = "constructorId") %>%
   left_join(driver.standings, by = c("raceId", "driverId")) %>%
   left_join(constructor.standings, by = c("raceId", "constructorId")) %>%
+  left_join(status, by = "statusId") %>%
   arrange(driverId, date) %>% # ensure the data is ordered correctly
   group_by(driverId) %>%
   mutate(
-    meanRaceResult10 = slider::slide_dbl(
-      raceResultPosition,  # Column to calculate rolling mean
-      mean,  # Function to apply
-      .before = 9,  # Use the prior 10 races (excluding current race)
-      .complete = TRUE  # Only compute if there are at least 10 races
-    )
+    meanRaceResult10 = slider::slide_dbl(raceResultPosition, mean, .before = 9, .complete = TRUE),
+    status = case_when(
+      status == "Finished" ~         "Finished",
+      grepl("\\+\\d+ Lap", status) ~ "Lapped",
+      TRUE ~                         "DNF"
+    ),
+    raceResultQualitative = get_qualitative_race_result(raceResultPosition)
+  ) %>%
+  mutate(
+    modeQualitativeResult10 = rollapply(raceResultQualitative, width = 10, FUN = get_mode, 
+                                         align = "right", fill = NA)
+  ) %>%
+  mutate(
+    prevRaceResultPosition =           lag(raceResultPosition),
+    prevDriverStandingsPosition =      lag(driverStandingsPosition),
+    prevConstructorStandingsPosition = lag(constructorStandingsPosition),
+    prevStatus =                       lag(status),
+    prevMeanRaceResult10 =             lag(meanRaceResult10),
+    prevModeQualitativeResult10 =      lag(modeQualitativeResult10),
+    prevRaceResultQualitative =        lag(raceResultQualitative)
   ) %>%
   ungroup() %>%
-  filter(!is.na(meanRaceResult10))
-
-# Final view of the final data
-glimpse(data)
+  filter(!is.na(prevMeanRaceResult10) & !is.na(prevRaceResultPosition) & (round!=1))
+data$driverStandingsPosition[is.na(data$driverStandingsPosition)] <- max(data$driverStandingsPosition, na.rm = TRUE)
+data$constructorStandingsPosition[is.na(data$constructorStandingsPosition)] <- max(data$constructorStandingsPosition, na.rm = TRUE)
+data$prevStatus[is.na(data$prevStatus)] <- "unknown"
 ```
+### Accuracy Metric
 ```{r}
-ggplot(data, aes(x = meanRaceResult10)) +
-  geom_histogram(binwidth = 1, fill = "blue", color = "black", alpha = 0.7) +
-  labs(title = "Histogram of Mean Race Result (Last 10 Races)",
-       x = "Mean Race Result Over Last 10 Races",
-       y = "Frequency") +
-  theme_minimal()
-colSums(is.na(data))
+accuracy<-function(predictions, actual) {
+  return(sum(actual == predictions) / length(actual))
+}
 ```
-### What should we do with the null values? What do they mean?
+### Building the Markov Chain
+```{r}
+get.trained.mc <- function(training.data.from, training.data.to) {
+  # Ensure all unique states are included (as character)
+  all_states <- as.character(unique(c(training.data.from, training.data.to)))
+
+  # Create a transition table (ensuring all states are included)
+  transition.table <- table(
+    factor(training.data.from, levels = all_states), 
+    factor(training.data.to, levels = all_states)
+  )
+
+  # Convert the table to a probability matrix
+  transition.matrix <- prop.table(transition.table, margin = 1)
+
+  # ✅ Explicitly convert "table" to a numeric matrix
+  transition.matrix <- matrix(as.numeric(transition.matrix), 
+                              nrow = length(all_states), 
+                              dimnames = list(all_states, all_states))
+
+  # Create and return the Markov Chain model
+  return(new("markovchain", states = all_states, transitionMatrix = transition.matrix))
+}
+mc.predict<-function(mc, test.data) {
+  return(sapply(test.data, function(x) rmarkovchain(n = 1, object = mc, t0 = x)))
+}
+```
+### XGBoost
+```{r}
+library(data.table)
+library(mltools)
+encodeRaceResult<-function(x) {
+  return case_when(
+      x == "Finished" ~         "Finished",
+      x ==  ~ "Lapped",
+      TRUE ~                         "DNF"
+    )
+}
+
+# Convert categorical variables using one-hot encoding
+data.xgboost <- as.data.table(data)
+data.xgboost[, `:=`(
+  circuitId = as.factor(circuitId),
+  constructorId = as.factor(constructorId),
+  prevStatus = as.factor(prevStatus),
+  raceResultQualitative = as.factor(raceResultQualitative)
+)]
+
+data.onehot <- one_hot(as.data.table(data.xgboost[, c(
+  "circuitId",
+  "constructorId",
+  "prevStatus",
+  "raceResultQualitative"
+)]))
+
+# Select numerical features
+data.numeric <- data.xgboost[, c(
+  "startingPosition",
+  "prevDriverStandingsPosition",
+  "prevConstructorStandingsPosition",
+  "prevRaceResultPosition",
+  "prevMeanRaceResult10"
+)]
+
+# Combine numerical and one-hot encoded categorical features
+data.xgboost <- cbind(data.numeric, data.onehot)
+
+# Convert target variable (raceResultQualitative) to numeric labels
+print(data.xgboost)
+data.xgboost$raceResultQualitative <- as.numeric(as.factor(data.xgboost$raceResultQualitative)) - 1
+
+train.data.xgboost <- data.xgboost[train.index, ]
+test.data.xgboost <- data.xgboost[-train.index, ]
+
+# Separate features and labels
+train.x <- as.matrix(train.data.xgboost)
+train.y <- train.data.xgboost$raceResultQualitative
+
+test.x <- as.matrix(test.data.xgboost)
+test.y <- test.data.xgboost$raceResultQualitative
+
+
+print(test.x)
+# Convert to XGBoost DMatrix
+dtrain <- xgb.DMatrix(data = train.x, label = train.y)
+dtest <- xgb.DMatrix(data = test.x, label = test.y)
+
+params <- list(
+  objective = "multi:softmax", # Multi-class classification
+  num_class = length(unique(data$raceResultQualitative)), # Number of classes
+  eval_metric = "mlogloss", # Multi-class log loss
+  eta = 0.1, # Learning rate
+  max_depth = 6, # Tree depth
+  subsample = 0.8, # Sample ratio
+  colsample_bytree = 0.8 # Column sample ratio
+)
+
+# Train the XGBoost model
+model <- xgb.train(
+  params = params,
+  data = dtrain,
+  nrounds = 100,
+  watchlist = list(train = dtrain, test = dtest),
+  verbose = 1
+)
+preds <- predict(model, dtest)
+
+# Convert numeric predictions back to original categories
+preds <- as.factor(preds)
+actual <- as.factor(test.y)
+
+# Calculate accuracy
+accuracy <- sum(preds == actual) / length(actual)
+print(paste("Model Accuracy:", round(accuracy * 100, 2), "%"))
+
+# Print confusion matrix
+conf_matrix <- confusionMatrix(preds, actual)
+print(conf_matrix)
+```
+
+### Naive Models
+```{r}
+naive.predict.same.as.last<-function(test.data) {
+  return(test.data$prevRaceResultQualitative)
+}
+naive.predict.same.as.mode<-function(test.data) {
+  return(test.data$prevModeQualitativeResult10)
+}
+naive.predict.same.as.start<-function(test.data) {
+  return(sapply(test.data$startingPosition, function(x) get_qualitative_race_result(x)))
+}
+```
+
+### Splitting the training and testing data
+```{r}
+train.index <- createDataPartition(1:nrow(data), p = 0.6, list = FALSE)
+train.data <- data[train.index,]
+test.data <- data[-train.index,]
+```
+### Training the Markov Chain
+```{r}
+mc <- get.trained.mc(train.data$prevRaceResultQualitative, train.data$raceResultQualitative)
+```
+### Test the Markov Chain
+```{r}
+predictions <- mc.predict(mc, test.data$prevRaceResultQualitative)
+mc.accuracy <- accuracy(predictions, test.data$raceResultQualitative)
+nsaa <- accuracy(naive.predict.same.as.mode(test.data),test.data$raceResultQualitative) 
+nsal <- accuracy(naive.predict.same.as.last(test.data), test.data$raceResultQualitative)
+nsas <- accuracy(naive.predict.same.as.start(test.data), test.data$raceResultQualitative)
+print(mc.accuracy)
+print(nsaa)
+print(nsal)
+print(nsas)
+```
