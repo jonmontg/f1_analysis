@@ -1,0 +1,89 @@
+#1.summary
+summary(combined_data)
+
+#2mean ,median and standard deviation for the position order
+mean_position <- mean(combined_data$positionOrder, na.rm = TRUE)
+median_position <- median(combined_data$positionOrder, na.rm = TRUE)
+sd_position <- sd(combined_data$positionOrder, na.rm = TRUE)
+
+cat("Mean Position:", mean_position, "\n")
+cat("Median Position:", median_position, "\n")
+cat("Standard Deviation of Position:", sd_position, "\n")
+
+
+#3correlation between two numerical columns(position order and grid)
+correlation <- cor(combined_data$positionOrder, combined_data$grid, use = "complete.obs")
+cat("Correlation between Position Order and Grid:", correlation, "\n")
+
+
+#4.Grouped summary statistics(DriverID)
+
+
+driver_summary <- combined_data %>%
+  group_by(driverId) %>%
+  summarise(
+    mean_position = mean(positionOrder, na.rm = TRUE),
+    median_position = median(positionOrder, na.rm = TRUE),
+    sd_position = sd(positionOrder, na.rm = TRUE),
+    count = n()
+  )
+
+print(driver_summary)
+
+#5 Linear Regression to see how grid position affects position order
+
+linear_model <- lm(positionOrder ~ grid, data = combined_data)
+summary(linear_model)
+
+#6 ANOVA to compare the mean position order across different constructorId groups
+
+anova_model <- aov(positionOrder ~ as.factor(constructorId), data = combined_data)
+summary(anova_model)
+
+
+#7 Chi Square Test between two categorical dataset such as Position order and ConstructorID
+
+
+# First, create a contingency table
+contingency_table <- table(combined_data$constructorId, combined_data$positionOrder)
+
+# Perform Chi-Square test
+chi_square_test <- chisq.test(contingency_table)
+print(chi_square_test)
+
+
+
+#8 VISUALIZATION of the dataset
+
+# Histogram of positionOrder
+ggplot(combined_data, aes(x = positionOrder)) +
+  geom_histogram(binwidth = 1, fill = "blue", color = "black") +
+  labs(title = "Distribution of Position Order", x = "Position Order", y = "Count")
+
+# Scatter plot of grid vs positionOrder
+ggplot(combined_data, aes(x = grid, y = positionOrder)) +
+  geom_point(alpha = 0.5) +
+  labs(title = "Grid Position vs Race Finish Position", x = "Grid Position", y = "Race Finish Position")
+
+
+#9 Hypothesis Test as T test to compare the mean positionorder between two groups
+
+# Example: Compare mean positionOrder between two drivers
+driver1_data <- combined_data %>% filter(driverId == 1)
+driver2_data <- combined_data %>% filter(driverId == 2)
+
+t_test_result <- t.test(driver1_data$positionOrder, driver2_data$positionOrder)
+print(t_test_result)
+
+
+#10 Time Series Analysis to analyze how a drivers performance changes over time
+
+# Example: Time series of a driver's positionOrder over races
+driver_time_series <- combined_data %>%
+  filter(driverId == 1) %>%
+  select(raceId, positionOrder) %>%
+  arrange(raceId)
+
+ggplot(driver_time_series, aes(x = raceId, y = positionOrder)) +
+  geom_line() +
+  labs(title = "Driver's Position Over Races", x = "Race ID", y = "Position Order")
