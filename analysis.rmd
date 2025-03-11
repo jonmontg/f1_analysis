@@ -328,11 +328,11 @@ data$driverStandingsPosition[is.na(data$driverStandingsPosition)] <- max(data$dr
 data$constructorStandingsPosition[is.na(data$constructorStandingsPosition)] <- max(data$constructorStandingsPosition, na.rm = TRUE)
 data$prevStatus[is.na(data$prevStatus)] <- "unknown"
 ```
-### Accuracy Metric
+### Splitting the training and testing data
 ```{r}
-accuracy<-function(predictions, actual) {
-  return(sum(actual == predictions) / length(actual))
-}
+train.index <- createDataPartition(1:nrow(data), p = 0.6, list = FALSE)
+train.data <- data[train.index,]
+test.data <- data[-train.index,]
 ```
 ### Building the Markov Chain
 ```{r}
@@ -349,7 +349,7 @@ get.trained.mc <- function(training.data.from, training.data.to) {
   # Convert the table to a probability matrix
   transition.matrix <- prop.table(transition.table, margin = 1)
 
-  # ✅ Explicitly convert "table" to a numeric matrix
+  # Explicitly convert "table" to a numeric matrix
   transition.matrix <- matrix(as.numeric(transition.matrix), 
                               nrow = length(all_states), 
                               dimnames = list(all_states, all_states))
@@ -365,13 +365,6 @@ mc.predict<-function(mc, test.data) {
 ```{r}
 library(data.table)
 library(mltools)
-encodeRaceResult<-function(x) {
-  return case_when(
-      x == "Finished" ~         "Finished",
-      x ==  ~ "Lapped",
-      TRUE ~                         "DNF"
-    )
-}
 
 # Convert categorical variables using one-hot encoding
 data.xgboost <- as.data.table(data)
@@ -379,14 +372,13 @@ data.xgboost[, `:=`(
   circuitId = as.factor(circuitId),
   constructorId = as.factor(constructorId),
   prevStatus = as.factor(prevStatus),
-  raceResultQualitative = as.factor(raceResultQualitative)
+  raceResultQualitative = encoded_qualitative_race_result(raceResultQualitative)
 )]
 
 data.onehot <- one_hot(as.data.table(data.xgboost[, c(
   "circuitId",
   "constructorId",
-  "prevStatus",
-  "raceResultQualitative"
+  "prevStatus"
 )]))
 
 # Select numerical features
@@ -395,28 +387,23 @@ data.numeric <- data.xgboost[, c(
   "prevDriverStandingsPosition",
   "prevConstructorStandingsPosition",
   "prevRaceResultPosition",
-  "prevMeanRaceResult10"
+  "prevMeanRaceResult10",
+  "raceResultQualitative"
 )]
 
 # Combine numerical and one-hot encoded categorical features
 data.xgboost <- cbind(data.numeric, data.onehot)
 
-# Convert target variable (raceResultQualitative) to numeric labels
-print(data.xgboost)
-data.xgboost$raceResultQualitative <- as.numeric(as.factor(data.xgboost$raceResultQualitative)) - 1
-
 train.data.xgboost <- data.xgboost[train.index, ]
 test.data.xgboost <- data.xgboost[-train.index, ]
 
 # Separate features and labels
-train.x <- as.matrix(train.data.xgboost)
+train.x <- as.matrix(train.data.xgboost[, !names(train.data.xgboost) %in% "raceResultQualitative", with = FALSE])
 train.y <- train.data.xgboost$raceResultQualitative
 
-test.x <- as.matrix(test.data.xgboost)
+test.x <- as.matrix(test.data.xgboost[, !names(test.data.xgboost) %in% "raceResultQualitative", with = FALSE])
 test.y <- test.data.xgboost$raceResultQualitative
 
-
-print(test.x)
 # Convert to XGBoost DMatrix
 dtrain <- xgb.DMatrix(data = train.x, label = train.y)
 dtest <- xgb.DMatrix(data = test.x, label = test.y)
@@ -445,13 +432,8 @@ preds <- predict(model, dtest)
 preds <- as.factor(preds)
 actual <- as.factor(test.y)
 
-# Calculate accuracy
-accuracy <- sum(preds == actual) / length(actual)
-print(paste("Model Accuracy:", round(accuracy * 100, 2), "%"))
-
-# Print confusion matrix
-conf_matrix <- confusionMatrix(preds, actual)
-print(conf_matrix)
+xgboost.predictions <- preds
+xgboost.actual <- actual
 ```
 
 ### Naive Models
@@ -466,26 +448,127 @@ naive.predict.same.as.start<-function(test.data) {
   return(sapply(test.data$startingPosition, function(x) get_qualitative_race_result(x)))
 }
 ```
-
-### Splitting the training and testing data
-```{r}
-train.index <- createDataPartition(1:nrow(data), p = 0.6, list = FALSE)
-train.data <- data[train.index,]
-test.data <- data[-train.index,]
-```
 ### Training the Markov Chain
 ```{r}
 mc <- get.trained.mc(train.data$prevRaceResultQualitative, train.data$raceResultQualitative)
 ```
 ### Test the Markov Chain
 ```{r}
-predictions <- mc.predict(mc, test.data$prevRaceResultQualitative)
-mc.accuracy <- accuracy(predictions, test.data$raceResultQualitative)
-nsaa <- accuracy(naive.predict.same.as.mode(test.data),test.data$raceResultQualitative) 
-nsal <- accuracy(naive.predict.same.as.last(test.data), test.data$raceResultQualitative)
-nsas <- accuracy(naive.predict.same.as.start(test.data), test.data$raceResultQualitative)
-print(mc.accuracy)
-print(nsaa)
-print(nsal)
-print(nsas)
+markov.predictions <- mc.predict(mc, test.data$prevRaceResultQualitative)
+comparison.report <- function(preds, actual) {
+  preds <- factor(sapply(preds, encoded_qualitative_race_result))
+  actual <- factor(sapply(actual, encoded_qualitative_race_result))
+
+  # Ensure both factors have the same levels
+  levels_combined <- union(levels(preds), levels(actual))
+  preds <- factor(preds, levels = levels_combined)
+  actual <- factor(actual, levels = levels_combined)
+
+  return(confusionMatrix(preds, actual))
+}
 ```
+### Statistics for the Markov Model
+Let's use the Chi-Squared test to see if the predictions are statistically
+correlated to the actual results.
+
+```{r}
+print(chisq.test(table(markov.predictions, test.data$raceResultQualitative)))
+print(comparison.report(markov.predictions, test.data$raceResultQualitative))
+```
+### Statistics for the Naive Same as Mode
+```{r}
+print(chisq.test(table(naive.predict.same.as.mode(test.data), test.data$raceResultQualitative)))
+print(comparison.report(naive.predict.same.as.mode(test.data), test.data$raceResultQualitative))
+```
+### Statistics for Naive Same as Last
+```{r}
+print(chisq.test(table(naive.predict.same.as.last(test.data), test.data$raceResultQualitative)))
+print(comparison.report(naive.predict.same.as.last(test.data), test.data$raceResultQualitative))
+```
+### Statistics for Naive Same as Starting Position
+```{r}
+print(chisq.test(table(naive.predict.same.as.start(test.data), test.data$raceResultQualitative)))
+print(comparison.report(naive.predict.same.as.start(test.data), test.data$raceResultQualitative))
+```
+### Statistics for the XGBoost Model
+```{r}
+print(chisq.test(table(xgboost.predictions, test.data$raceResultQualitative)))
+print(confusionMatrix(xgboost.predictions, xgboost.actual))
+```
+### Interpreting the Confusion Matrix
+A confusion matrix is a tool for evaluating the performance of a predictive model
+used when you have labeled categorical data. It shows the predicted category on
+one axis and the true category on the other. Each cell contains the number of
+observations for that cross section.
+
+The Accuracy metric measures the total number of correct classifications
+divided by the total number of cases:
+
+$$
+Accuracy(a, p) = \frac{1}{N}\sum_{i=1}^{N}
+\begin{cases}
+1 & \text {if }a_i=p_i \\
+0 & \text{else}
+\end{cases}
+$$
+The confidence interval for an accuracy score is calculated via Wilson's score
+interval. The Wilson score interval is asymmetric, and it doesn't suffer from problems of overshoot and zero-width intervals. It can be safely employed with
+small samples and skewed observations. 
+
+$$
+z_{a} \approx \frac{(p-\hat{p})}{\sigma_{n}}
+$$
+where $z_{a}$ is the standard normal deviation for the desired confidence interval
+$1-a$, $p$ is the 'true' accuracy, $hat{p}$ is the observed accuracy, and $\sigma_{n}$
+is the binomial sample standard deviation. The derivation of the Wilson score
+interval is beyond the scope of this paper.
+
+### Comparing the accuracy of our predictions
+All of our models showed significant correlation between the predictions
+and outcomes, but which model performed best? \\
+
+Markov Model
+  Accuracy : 0.4381         
+  95% CI : (0.4272, 0.449)
+  
+Same as Last
+  Accuracy : 0.5186          
+  95% CI : (0.5077, 0.5296)
+  
+Same as Starting Position
+  Accuracy : 0.5371         
+  95% CI : (0.5262, 0.548)
+  
+Same as Mode
+  Accuracy : 0.5672          
+  95% CI : (0.5564, 0.5781)
+  
+XGBoost
+  Accuracy : 0.604           
+  95% CI : (0.5933, 0.6147)
+  
+  
+We will use Paired McNemar's Test to compare these accuracy scores because
+each model made predictions from the same dataset. Our null hypothesis
+is that there is no difference in accuracy between any of the models.
+
+McNemar's Test is the following:
+\begin{table}
+  \centering
+  \begin{tabular}{|c|c|c|}
+    \hline
+                        & Model B Correct & Model B Incorrect \\
+      Model A Correct   & $n_{11}$        & $n_{10}$          \\
+      Model A Incorrect & $n_{01}$        & $n_{00}$          \\
+    \hline
+  \end{tabular}
+\end{table}
+
+McNemar's test statistic is:
+$$
+\chi^{2}=\frac{(n_{10}-n_{01})^2}{n_{10}+n_{01}}
+$$
+Where $\chi^{2}$ has a chi-squared distribution with 1 degree of freedom.
+
+We will perform McNemar's test on each pair of predictions from least
+to most accurate. If we have predictions $a, b, c$ with $accuracy(a)>accuracy(b)$ and $accuracy(b)>accuracy(c)$, we can say that $accuracy(a)>accuracy(b)>accuracy(c)$.
