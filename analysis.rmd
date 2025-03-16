@@ -466,7 +466,6 @@ comparison.report <- function(preds, actual) {
 markov.predictions <- mc.predict(mc, test.data$prevRaceResultQualitative)
 naive.same.as.last <- naive.predict.same.as.mode(test.data)
 naive.same.as.mode <- naive.predict.same.as.mode(test.data)
-naive.same.as.average <- naive.predict.same.as.average(test.data)
 naive.same.as.start <- naive.predict.same.as.start(test.data)
 ```
 ### Statistics for the Markov Model
@@ -598,5 +597,52 @@ print(paste("Same as Last v Same as Start: p =",
 print(paste("Same as Start v Same as Mode: p =",
             mcnemar.compare(naive.same.as.start, naive.same.as.mode, test.data$raceResultQualitative)))
 print(paste("Same as Mode v XGBoost: p =",
-            mcnemar.compare(naive.same.as.mode, xgboost.predictions, test.data$raceResultQualitative)))
+            mcnemar.compare(naive.same.as.mode, sapply(xgboost.predictions, decode_qualitative_race_result), test.data$raceResultQualitative)))
+```
+
+### Given a model, how does its accuracy, compare across each category?
+```{r}
+plot.category.accuracy<-function(name, pred, actual) {
+  adf <- data.frame(actual, pred) %>%
+    mutate(correct = actual == pred) %>%
+    group_by(actual) %>%
+    summarise(accuracy = mean(correct))
+  return(ggplot(adf, aes(x = actual, y = accuracy, fill = actual)) +
+    geom_bar(stat = "identity") +
+    labs(title = paste(name, "Prediction Accuracy Per Result"),
+         x = "Outcome",
+         y = "Accuracy") +
+    theme_minimal())
+}
+markov.predictions.display <- data.frame(prediction = markov.predictions, actual = test.data$raceResultQualitative)
+naive.same.as.last.display <- data.frame(prediction = naive.same.as.last, actual = test.data$raceResultQualitative)
+naive.same.as.mode.display <- data.frame(prediction = naive.same.as.mode, actual = test.data$raceResultQualitative)
+naive.same.as.start.display <- data.frame(prediction = naive.same.as.start, actual = test.data$raceResultQualitative)
+xgboost.predictions.display <- data.frame(prediction = sapply(xgboost.predictions, decode_qualitative_race_result), actual = test.data$raceResultQualitative)
+
+markov.predictions.display$model  <- "Markov"
+naive.same.as.last.display$model  <- "Same as Last"
+naive.same.as.mode.display$model  <- "Same as Mode"
+naive.same.as.start.display$model <- "Same as Start"
+xgboost.predictions.display$model <- "XGBoost"
+
+display.predictions.data <- bind_rows(
+  markov.predictions.display,
+  naive.same.as.last.display,
+  naive.same.as.mode.display,
+  naive.same.as.start.display,
+  xgboost.predictions.display
+)
+
+adf <- display.predictions.data %>%
+  group_by(model, actual) %>%
+  mutate(correct = actual == prediction) %>%
+  summarise(accuracy = mean(correct))
+print(adf)
+
+ggplot(adf, aes(x = actual, y = accuracy, fill = model)) +
+  geom_bar(stat = "identity", position = "dodge") +  # Use bar chart instead of histogram
+  labs(title = "Model Accuracy Per Category", x = "Actual Category", y = "Accuracy") +
+  theme_minimal()
+
 ```
