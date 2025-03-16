@@ -429,11 +429,8 @@ model <- xgb.train(
 preds <- predict(model, dtest)
 
 # Convert numeric predictions back to original categories
-preds <- as.factor(preds)
-actual <- as.factor(test.y)
-
-xgboost.predictions <- preds
-xgboost.actual <- actual
+xgboost.predictions <- as.factor(preds)
+xgboost.actual <- as.factor(test.y)
 ```
 
 ### Naive Models
@@ -452,9 +449,9 @@ naive.predict.same.as.start<-function(test.data) {
 ```{r}
 mc <- get.trained.mc(train.data$prevRaceResultQualitative, train.data$raceResultQualitative)
 ```
-### Test the Markov Chain
+
+### Generate all the predictions
 ```{r}
-markov.predictions <- mc.predict(mc, test.data$prevRaceResultQualitative)
 comparison.report <- function(preds, actual) {
   preds <- factor(sapply(preds, encoded_qualitative_race_result))
   actual <- factor(sapply(actual, encoded_qualitative_race_result))
@@ -466,6 +463,11 @@ comparison.report <- function(preds, actual) {
 
   return(confusionMatrix(preds, actual))
 }
+markov.predictions <- mc.predict(mc, test.data$prevRaceResultQualitative)
+naive.same.as.last <- naive.predict.same.as.mode(test.data)
+naive.same.as.mode <- naive.predict.same.as.mode(test.data)
+naive.same.as.average <- naive.predict.same.as.average(test.data)
+naive.same.as.start <- naive.predict.same.as.start(test.data)
 ```
 ### Statistics for the Markov Model
 Let's use the Chi-Squared test to see if the predictions are statistically
@@ -477,18 +479,18 @@ print(comparison.report(markov.predictions, test.data$raceResultQualitative))
 ```
 ### Statistics for the Naive Same as Mode
 ```{r}
-print(chisq.test(table(naive.predict.same.as.mode(test.data), test.data$raceResultQualitative)))
-print(comparison.report(naive.predict.same.as.mode(test.data), test.data$raceResultQualitative))
+print(chisq.test(table(naive.same.as.mode, test.data$raceResultQualitative)))
+print(comparison.report(naive.same.as.mode, test.data$raceResultQualitative))
 ```
 ### Statistics for Naive Same as Last
 ```{r}
-print(chisq.test(table(naive.predict.same.as.last(test.data), test.data$raceResultQualitative)))
-print(comparison.report(naive.predict.same.as.last(test.data), test.data$raceResultQualitative))
+print(chisq.test(table(naive.same.as.last, test.data$raceResultQualitative)))
+print(comparison.report(naive.same.as.last, test.data$raceResultQualitative))
 ```
 ### Statistics for Naive Same as Starting Position
 ```{r}
-print(chisq.test(table(naive.predict.same.as.start(test.data), test.data$raceResultQualitative)))
-print(comparison.report(naive.predict.same.as.start(test.data), test.data$raceResultQualitative))
+print(chisq.test(table(naive.same.as.start, test.data$raceResultQualitative)))
+print(comparison.report(naive.same.as.start, test.data$raceResultQualitative))
 ```
 ### Statistics for the XGBoost Model
 ```{r}
@@ -502,7 +504,7 @@ one axis and the true category on the other. Each cell contains the number of
 observations for that cross section.
 
 The Accuracy metric measures the total number of correct classifications
-divided by the total number of cases:
+divided by the total number of exambles:
 
 $$
 Accuracy(a, p) = \frac{1}{N}\sum_{i=1}^{N}
@@ -572,3 +574,29 @@ Where $\chi^{2}$ has a chi-squared distribution with 1 degree of freedom.
 
 We will perform McNemar's test on each pair of predictions from least
 to most accurate. If we have predictions $a, b, c$ with $accuracy(a)>accuracy(b)$ and $accuracy(b)>accuracy(c)$, we can say that $accuracy(a)>accuracy(b)>accuracy(c)$.
+
+### Markov to Same as Last
+```{r}
+mcnemar.compare<-function(predictions.a, predictions.b, actual) {
+  correct.a <- as.integer(predictions.a == actual)
+  correct.b <- as.integer(predictions.b == actual)
+  a <- sum(correct.a == 1 & correct.b == 1)
+  b <- sum(correct.a == 1 & correct.b == 0)
+  c <- sum(correct.a == 0 & correct.b == 1)
+  d <- sum(correct.a == 0 & correct.b == 0)
+  return(
+    mcnemar.test(matrix(
+      c(a, b, c, d), nrow=2, byrow=TRUE,
+      dimnames=list("Model 1" = c("Correct", "Incorrect"),
+                    "Model 2" = c("Correct", "Incorrect"))
+  ))$p.value)
+}
+print(paste("Markov v Same as Last: p =",
+            mcnemar.compare(markov.predictions, naive.same.as.last, test.data$raceResultQualitative)))
+print(paste("Same as Last v Same as Start: p =",
+            mcnemar.compare(naive.same.as.last, naive.same.as.start, test.data$raceResultQualitative)))
+print(paste("Same as Start v Same as Mode: p =",
+            mcnemar.compare(naive.same.as.start, naive.same.as.mode, test.data$raceResultQualitative)))
+print(paste("Same as Mode v XGBoost: p =",
+            mcnemar.compare(naive.same.as.mode, xgboost.predictions, test.data$raceResultQualitative)))
+```
